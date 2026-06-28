@@ -1,0 +1,443 @@
+<?xml version="1.0" encoding="UTF-8"?>
+    <project xmlns="http://maven.apache.org/POM/4.0.0"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+            https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+        <modelVersion>4.0.0</modelVersion>
+
+        <parent>
+            <groupId>com.chaos.payment</groupId>
+            <artifactId>payment-chaos-engineering</artifactId>
+            <version>1.0.0-SNAPSHOT</version>
+            <relativePath>../../pom.xml</relativePath>
+        </parent>
+
+        <artifactId>payment-gateway</artifactId>
+        <name>Payment - Gateway Service</name>
+        <description>
+            API Gateway pour l'agrégateur de paiements mobile money.
+            Gère CQRS Commands, Event Sourcing, DDD Aggregates.
+            Supporte: Orange, Moov, MTN, Wave, Visa, Mastercard,
+            Airtel, M-Pesa, Bitcoin, PI/SPI BCEAO
+        </description>
+
+        <dependencies>
+
+            <!-- ================================ -->
+            <!-- Internal Modules -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>com.chaos.payment</groupId>
+                <artifactId>domain-model</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>com.chaos.payment</groupId>
+                <artifactId>common-utils</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>com.chaos.payment</groupId>
+                <artifactId>chaos-core</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Quarkus Core Extensions -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-resteasy-reactive</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-resteasy-reactive-jackson</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-arc</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-vertx</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-mutiny</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Validation -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-hibernate-validator</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Messaging - Kafka -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-smallrye-reactive-messaging-kafka</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.smallrye.reactive</groupId>
+                <artifactId>smallrye-reactive-messaging-kafka-api</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Messaging - RabbitMQ / AMQP -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-smallrye-reactive-messaging-rabbitmq</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- AWS DynamoDB -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkiverse.amazonservices</groupId>
+                <artifactId>quarkus-amazon-dynamodb</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>dynamodb</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>dynamodb-enhanced</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>url-connection-client</artifactId>
+            </dependency>
+            <!-- NOTE: quarkus-amazon-lambda-http is intentionally NOT a default
+                 dependency. It replaces the embedded HTTP server with an AWS Lambda
+                 poll loop, which breaks @QuarkusTest REST tests (RestAssured cannot
+                 connect). It is activated only for deployment via the `lambda` profile
+                 (see <profiles> below): mvn package -Plambda -->
+
+            <!-- ================================ -->
+            <!-- AWS SDK - Autres services -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>sqs</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>sns</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>route53</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>cloudwatch</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Fault Tolerance (Circuit Breaker, Retry...) -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-smallrye-fault-tolerance</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-circuitbreaker</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-retry</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-bulkhead</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-timelimiter</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-micrometer</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Monitoring & Metrics -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-micrometer</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-micrometer-registry-prometheus</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.micrometer</groupId>
+                <artifactId>micrometer-core</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.micrometer</groupId>
+                <artifactId>micrometer-registry-prometheus</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Tracing (OpenTelemetry) -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-opentelemetry</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-api</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Health Checks -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-smallrye-health</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- REST Client (Payment Providers) -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-rest-client-reactive</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-rest-client-reactive-jackson</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Security / JWT -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-security</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-smallrye-jwt</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-oidc</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- OpenAPI / Swagger -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-smallrye-openapi</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Scheduler (Chaos Scheduling) -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-scheduler</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Cache -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-cache</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Logging -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-logging-json</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Jackson / Serialization -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-jackson</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.datatype</groupId>
+                <artifactId>jackson-datatype-jsr310</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.module</groupId>
+                <artifactId>jackson-module-parameter-names</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- MapStruct (DTO Mapping) -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>org.mapstruct</groupId>
+                <artifactId>mapstruct</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Utilities -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>com.google.guava</groupId>
+                <artifactId>guava</artifactId>
+            </dependency>
+
+            <!-- ================================ -->
+            <!-- Tests -->
+            <!-- ================================ -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-junit5</artifactId>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-junit5-mockito</artifactId>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.rest-assured</groupId>
+                <artifactId>rest-assured</artifactId>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.assertj</groupId>
+                <artifactId>assertj-core</artifactId>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.mockito</groupId>
+                <artifactId>mockito-junit-jupiter</artifactId>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.awaitility</groupId>
+                <artifactId>awaitility</artifactId>
+                <scope>test</scope>
+            </dependency>
+
+            <!-- TestContainers -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers</artifactId>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>kafka</artifactId>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>localstack</artifactId>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>rabbitmq</artifactId>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <scope>test</scope>
+            </dependency>
+
+            <!-- WireMock (Mock payment providers) -->
+            <dependency>
+                <groupId>org.wiremock</groupId>
+                <artifactId>wiremock-standalone</artifactId>
+                <scope>test</scope>
+            </dependency>
+
+        </dependencies>
+
+        <build>
+            <plugins>
+
+                <!-- Quarkus Plugin -->
+                <plugin>
+                    <groupId>io.quarkus.platform</groupId>
+                    <artifactId>quarkus-maven-plugin</artifactId>
+                    <!-- fast-jar (default): preserves the original artifact for test dependencies.
+                         Use -Dquarkus.package.type=uber-jar for Lambda deployment. -->
+                </plugin>
+
+                <!-- Jandex: index this module's classes so that when the JAR is used
+                     as a test dependency by another Quarkus app (resilience/integration
+                     tests), its JAX-RS resources and CDI beans are discovered. -->
+                <plugin>
+                    <groupId>io.smallrye</groupId>
+                    <artifactId>jandex-maven-plugin</artifactId>
+                    <version>3.1.6</version>
+                    <executions>
+                        <execution>
+                            <id>make-index</id>
+                            <goals>
+                                <goal>jandex</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+
+                <!-- Compiler avec MapStruct + Lombok -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                </plugin>
+
+                <!-- Surefire -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                </plugin>
+
+                <!-- JaCoCo -->
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                </plugin>
+
+            </plugins>
+        </build>
+
+        <profiles>
+            <!-- Deployment profile: package the service as an AWS Lambda artifact.
+                 Activates quarkus-amazon-lambda-http (REST via API Gateway proxy) and
+                 uber-jar packaging. Kept out of the default build so @QuarkusTest REST
+                 tests run against the normal embedded HTTP server.
+                 Usage: mvn clean package -Plambda -->
+            <profile>
+                <id>lambda</id>
+                <dependencies>
+                    <dependency>
+                        <groupId>io.quarkus</groupId>
+                        <artifactId>quarkus-amazon-lambda-http</artifactId>
+                    </dependency>
+                </dependencies>
+                <properties>
+                    <quarkus.package.type>uber-jar</quarkus.package.type>
+                </properties>
+            </profile>
+        </profiles>
+
+    </project>

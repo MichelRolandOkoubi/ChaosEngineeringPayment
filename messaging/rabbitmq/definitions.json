@@ -1,0 +1,132 @@
+{
+  "vhosts": [
+    { "name": "payment" }
+  ],
+  "users": [
+    {
+      "name": "payment",
+      "password_hash": "payment_secret",
+      "tags": "administrator"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "payment",
+      "vhost": "payment",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "payment.events",
+      "vhost": "payment",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "payment.commands",
+      "vhost": "payment",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "chaos.events",
+      "vhost": "payment",
+      "type": "fanout",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    },
+    {
+      "name": "payment.dlx",
+      "vhost": "payment",
+      "type": "direct",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "payment-retry-queue",
+      "vhost": "payment",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "payment.dlx",
+        "x-dead-letter-routing-key": "payment.failed",
+        "x-message-ttl": 300000,
+        "x-max-retries": 3
+      }
+    },
+    {
+      "name": "chaos-notifications",
+      "vhost": "payment",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 86400000
+      }
+    },
+    {
+      "name": "payment-events-consumer",
+      "vhost": "payment",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "payment.dlx",
+        "x-dead-letter-routing-key": "payment.events.failed",
+        "x-message-ttl": 604800000
+      }
+    },
+    {
+      "name": "payment.dead-letter",
+      "vhost": "payment",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 2592000000
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "source": "payment.events",
+      "vhost": "payment",
+      "destination": "payment-events-consumer",
+      "destination_type": "queue",
+      "routing_key": "payment.#",
+      "arguments": {}
+    },
+    {
+      "source": "payment.commands",
+      "vhost": "payment",
+      "destination": "payment-retry-queue",
+      "destination_type": "queue",
+      "routing_key": "payment.retry",
+      "arguments": {}
+    },
+    {
+      "source": "chaos.events",
+      "vhost": "payment",
+      "destination": "chaos-notifications",
+      "destination_type": "queue",
+      "routing_key": "",
+      "arguments": {}
+    },
+    {
+      "source": "payment.dlx",
+      "vhost": "payment",
+      "destination": "payment.dead-letter",
+      "destination_type": "queue",
+      "routing_key": "#",
+      "arguments": {}
+    }
+  ]
+}

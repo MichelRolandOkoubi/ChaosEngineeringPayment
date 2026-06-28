@@ -1,0 +1,195 @@
+# Docker Compose override for Chaos Engineering mode
+# Usage: docker compose -f docker-compose.yml -f docker-compose.chaos.yml up
+#
+# Adds:
+#   - CHAOS_ENABLED=true on all application services
+#   - Toxiproxy: network-level chaos (latency, packet loss, resets)
+#   - Pumba: container-level chaos (kill, pause, CPU/memory stress)
+#   - chaos-dashboard: live experiment status page (port 8088)
+
+version: '3.9'
+
+services:
+
+  # ============================================
+  # Application services — chaos overrides
+  # ============================================
+
+  payment-gateway:
+    environment:
+      CHAOS_ENABLED: "true"
+      CHAOS_FAILURE_RATE: "0.15"
+      CHAOS_LATENCY_MIN_MS: "500"
+      CHAOS_LATENCY_MAX_MS: "3000"
+      CHAOS_SCENARIOS: "LATENCY,ERROR,THROTTLE,NETWORK_PARTITION,REGION_FAILURE"
+      QUARKUS_PROFILE: "chaos-testing"
+      KAFKA_BOOTSTRAP_SERVERS: "toxiproxy:19092"
+      DYNAMODB_ENDPOINT: "http://toxiproxy:18000"
+    depends_on:
+      toxiproxy:
+        condition: service_healthy
+    labels:
+      chaos.target: "true"
+      chaos.service: "payment-gateway"
+
+  payment-processor:
+    environment:
+      CHAOS_ENABLED: "true"
+      CHAOS_FAILURE_RATE: "0.15"
+      CHAOS_SCENARIOS: "LATENCY,ERROR,THROTTLE"
+      KAFKA_BOOTSTRAP_SERVERS: "toxiproxy:19092"
+      DYNAMODB_ENDPOINT: "http://toxiproxy:18000"
+    depends_on:
+      toxiproxy:
+        condition: service_healthy
+    labels:
+      chaos.target: "true"
+      chaos.service: "payment-processor"
+
+  payment-query:
+    environment:
+      CHAOS_ENABLED: "true"
+      KAFKA_BOOTSTRAP_SERVERS: "toxiproxy:19092"
+      DYNAMODB_ENDPOINT: "http://toxiproxy:18000"
+    depends_on:
+      toxiproxy:
+        condition: service_healthy
+    labels:
+      chaos.target: "true"
+      chaos.service: "payment-query"
+
+  chaos-monkey:
+    environment:
+      CHAOS_ENABLED: "true"
+      CHAOS_FAILURE_RATE: "0.20"
+      CHAOS_LATENCY_MIN_MS: "200"
+      CHAOS_LATENCY_MAX_MS: "5000"
+      CHAOS_SCENARIOS: "LATENCY,ERROR,THROTTLE,NETWORK_PARTITION,REGION_FAILURE,DATA_CORRUPTION,DUPLICATE_TRANSACTION"
+      TOXIPROXY_URL: "http://toxiproxy:8474"
+    labels:
+      chaos.orchestrator: "true"
+
+  fraud-detection:
+    environment:
+      CHAOS_ENABLED: "true"
+      CHAOS_FAILURE_RATE: "0.10"
+    labels:
+      chaos.target: "true"
+      chaos.service: "fraud-detection"
+
+  # ============================================
+  # Toxiproxy — network chaos injection
+  # ============================================
+  # Sits in front of Kafka and DynamoDB-local.
+  # The chaos-monkey calls the Toxiproxy API (port 8474)
+  # to programmatically add latency, bandwidth caps, or TCP resets.
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.7.0
+    container_name: toxiproxy
+    networks:
+      - payment-network
+    ports:
+      - "8474:8474"    # Toxiproxy management API
+      - "19092:19092"  # Kafka proxy  (apps connect here, upstream = kafka:29092)
+      - "18000:18000"  # DynamoDB-local proxy (upstream = dynamodb-local:8000)
+      - "25672:25672"  # RabbitMQ AMQP proxy  (upstream = rabbitmq:5672)
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8474/version"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  toxiproxy-init:
+    image: ghcr.io/shopify/toxiproxy:2.7.0
+    container_name: toxiproxy-init
+    networks:
+      - payment-network
+    depends_on:
+      toxiproxy:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      dynamodb-local:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+        /toxiproxy-cli -host toxiproxy create kafka-proxy    --listen 0.0.0.0:19092 --upstream kafka:29092       &&
+        /toxiproxy-cli -host toxiproxy create dynamodb-proxy --listen 0.0.0.0:18000 --upstream dynamodb-local:8000 &&
+        /toxiproxy-cli -host toxiproxy create rabbitmq-proxy --listen 0.0.0.0:25672 --upstream rabbitmq:5672      &&
+        echo 'Toxiproxy proxies registered successfully'
+      "
+    restart: "no"
+
+  # ============================================
+  # Pumba — container-level chaos
+  # ============================================
+  # Randomly applies tc-based network emulation (delay + jitter)
+  # to containers whose name matches the pattern "payment".
+  # Runs every 2 minutes for 30-second bursts.
+  pumba:
+    image: gaiaadm/pumba:0.10.0
+    container_name: pumba
+    networks:
+      - payment-network
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: >
+      --log-level info
+      --interval 120s
+      netem
+        --duration 30s
+        --tc-image ghcr.io/alexei-led/pumba-tc-alpine:latest
+        delay
+          --time 500
+          --jitter 200
+          --distribution normal
+      re2:.*payment.*
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  # ============================================
+  # Chaos Dashboard — static status page
+  # ============================================
+  # Served at http://localhost:8088
+  # Mount the monitoring/chaos/dashboard directory with an index.html
+  # that polls /api/v1/chaos/report and the Toxiproxy API.
+  chaos-dashboard:
+    image: nginx:1.25-alpine
+    container_name: chaos-dashboard
+    networks:
+      - payment-network
+    ports:
+      - "8088:80"
+    volumes:
+      - ./monitoring/chaos/dashboard:/usr/share/nginx/html:ro
+    depends_on:
+      - chaos-monkey
+      - toxiproxy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+
+  # ============================================
+  # Prometheus — shorter retention in chaos mode
+  # ============================================
+  prometheus:
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'

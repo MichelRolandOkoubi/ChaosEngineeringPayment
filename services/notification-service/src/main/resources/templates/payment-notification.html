@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; }
+        .header { background: #1a73e8; color: white; padding: 24px; text-align: center; }
+        .body { padding: 24px; }
+        .status-badge { display: inline-block; padding: 6px 14px; border-radius: 20px; font-weight: bold; }
+        .COMPLETED { background: #e6f4ea; color: #137333; }
+        .FAILED { background: #fce8e6; color: #c5221f; }
+        .REFUNDED { background: #e8f0fe; color: #1967d2; }
+        .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .footer { background: #f8f9fa; padding: 16px; text-align: center; color: #666; font-size: 12px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h2>
+            {#if eventType == 'PaymentCompletedEvent'}Paiement confirmé ✓
+            {#else if eventType == 'PaymentFailedEvent'}Paiement échoué ✗
+            {#else if eventType == 'PaymentRefundedEvent'}Remboursement ↩
+            {#else}Notification paiement
+            {/if}
+        </h2>
+    </div>
+    <div class="body">
+        <p>Bonjour,</p>
+        <p>Voici les détails de votre transaction :</p>
+
+        <div class="detail-row">
+            <span>Référence</span>
+            <strong>{transactionId}</strong>
+        </div>
+        <div class="detail-row">
+            <span>Montant</span>
+            <strong>{amount} {currency}</strong>
+        </div>
+        <div class="detail-row">
+            <span>Fournisseur</span>
+            <strong>{provider}</strong>
+        </div>
+        <div class="detail-row">
+            <span>Statut</span>
+            <span class="status-badge {status}">{status}</span>
+        </div>
+        {#if reason}
+        <div class="detail-row">
+            <span>Motif</span>
+            <span>{reason}</span>
+        </div>
+        {/if}
+    </div>
+    <div class="footer">
+        <p>Payment Chaos Engineering Platform</p>
+        <p>Ceci est un message automatique, merci de ne pas y répondre.</p>
+    </div>
+</div>
+</body>
+</html>

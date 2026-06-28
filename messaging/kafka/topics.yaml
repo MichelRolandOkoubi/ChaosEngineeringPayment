@@ -1,0 +1,59 @@
+topics:
+  - name: payment-events
+    partitions: 12
+    replication-factor: 3
+    config:
+      retention.ms: "604800000"       # 7 days
+      cleanup.policy: delete
+      compression.type: snappy
+      min.insync.replicas: "2"
+      message.timestamp.type: CreateTime
+
+  - name: payment-commands
+    partitions: 6
+    replication-factor: 3
+    config:
+      retention.ms: "86400000"        # 1 day
+      cleanup.policy: delete
+      compression.type: snappy
+      min.insync.replicas: "2"
+
+  - name: chaos-events
+    partitions: 3
+    replication-factor: 3
+    config:
+      retention.ms: "2592000000"      # 30 days
+      cleanup.policy: delete
+      compression.type: gzip
+
+  - name: fraud-alerts
+    partitions: 6
+    replication-factor: 3
+    config:
+      retention.ms: "2592000000"      # 30 days
+      cleanup.policy: delete
+      compression.type: snappy
+      min.insync.replicas: "2"
+
+  - name: payment-notifications
+    partitions: 6
+    replication-factor: 3
+    config:
+      retention.ms: "86400000"        # 1 day
+      cleanup.policy: delete
+      compression.type: snappy
+
+  # Dead Letter Topics
+  - name: payment-events.DLT
+    partitions: 3
+    replication-factor: 3
+    config:
+      retention.ms: "2592000000"      # 30 days
+      cleanup.policy: delete
+
+  - name: payment-commands.DLT
+    partitions: 3
+    replication-factor: 3
+    config:
+      retention.ms: "2592000000"
+      cleanup.policy: delete

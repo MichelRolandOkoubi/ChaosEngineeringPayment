@@ -1,0 +1,571 @@
+  version: '3.9'
+
+  x-common-variables: &common-variables
+    TZ: UTC
+    JAVA_OPTS: "-Xmx512m -Xms256m"
+
+  networks:
+    payment-network:
+      driver: bridge
+      ipam:
+        config:
+          - subnet: 172.20.0.0/16
+
+  volumes:
+    kafka-data:
+    zookeeper-data:
+    rabbitmq-data:
+    elasticsearch-data:
+    grafana-data:
+    prometheus-data:
+    dynamodb-data:
+
+  services:
+    # ============================================
+    # Infrastructure Services
+    # ============================================
+    
+    zookeeper:
+      image: confluentinc/cp-zookeeper:7.5.0
+      container_name: zookeeper
+      networks:
+        - payment-network
+      environment:
+        ZOOKEEPER_CLIENT_PORT: 2181
+        ZOOKEEPER_TICK_TIME: 2000
+        ZOOKEEPER_LOG4J_ROOT_LOGLEVEL: WARN
+      volumes:
+        - zookeeper-data:/var/lib/zookeeper/data
+      healthcheck:
+        test: ["CMD", "nc", "-z", "localhost", "2181"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+      deploy:
+        resources:
+          limits:
+            memory: 256M
+
+    kafka:
+      image: confluentinc/cp-kafka:7.5.0
+      container_name: kafka
+      depends_on:
+        zookeeper:
+          condition: service_healthy
+      networks:
+        - payment-network
+      ports:
+        - "9092:9092"
+        - "9101:9101"
+      environment:
+        KAFKA_BROKER_ID: 1
+        KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+        KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+        KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+        KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
+        KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+        KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+        KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+        KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+        KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+        KAFKA_NUM_PARTITIONS: 3
+        KAFKA_LOG_RETENTION_HOURS: 168
+        KAFKA_JMX_PORT: 9101
+        KAFKA_JMX_HOSTNAME: localhost
+      volumes:
+        - kafka-data:/var/lib/kafka/data
+      healthcheck:
+        test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+        interval: 15s
+        timeout: 10s
+        retries: 5
+      deploy:
+        resources:
+          limits:
+            memory: 512M
+
+    kafka-init:
+      image: confluentinc/cp-kafka:7.5.0
+      container_name: kafka-init
+      depends_on:
+        kafka:
+          condition: service_healthy
+      networks:
+        - payment-network
+      command: >
+        bash -c "
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 --topic payment-events --partitions 3 --replication-factor 1 &&
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 --topic payment-commands --partitions 3 --replication-factor 1 &&
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 --topic chaos-events --partitions 1 --replication-factor 1 &&
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 --topic fraud-alerts --partitions 1 --replication-factor 1 &&
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 --topic payment-notifications --partitions 2 --replication-factor 1 &&
+          kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 --topic payment-dlq --partitions 1 --replication-factor 1 &&
+          echo 'Kafka topics created successfully'
+        "
+
+    rabbitmq:
+      image: rabbitmq:3.12-management-alpine
+      container_name: rabbitmq
+      networks:
+        - payment-network
+      ports:
+        - "5672:5672"
+        - "15672:15672"
+        - "15692:15692"
+      environment:
+        RABBITMQ_DEFAULT_USER: payment
+        RABBITMQ_DEFAULT_PASS: payment_secret
+        RABBITMQ_DEFAULT_VHOST: payment-vhost
+        RABBITMQ_PLUGINS_DIR: /opt/rabbitmq/plugins
+      volumes:
+        - rabbitmq-data:/var/lib/rabbitmq
+        - ./messaging/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins
+        - ./messaging/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      healthcheck:
+        test: ["CMD", "rabbitmq-diagnostics", "ping"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+      deploy:
+        resources:
+          limits:
+            memory: 512M
+
+    dynamodb-local:
+      image: amazon/dynamodb-local:2.3.0
+      container_name: dynamodb-local
+      networks:
+        - payment-network
+      ports:
+        - "8000:8000"
+      command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/home/dynamodblocal/data/"]
+      volumes:
+        - dynamodb-data:/home/dynamodblocal/data
+      healthcheck:
+        test: ["CMD-SHELL", "curl -f http://localhost:8000/shell/ || exit 1"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+      deploy:
+        resources:
+          limits:
+            memory: 256M
+
+    dynamodb-init:
+      image: amazon/aws-cli:2.13.0
+      container_name: dynamodb-init
+      depends_on:
+        dynamodb-local:
+          condition: service_healthy
+      networks:
+        - payment-network
+      environment:
+        AWS_DEFAULT_REGION: us-east-1
+        AWS_ACCESS_KEY_ID: test
+        AWS_SECRET_ACCESS_KEY: test
+      volumes:
+        - ./infrastructure/dynamodb/setup.sh:/setup.sh
+      command: ["/bin/bash", "/setup.sh"]
+
+    # ============================================
+    # Application Services
+    # ============================================
+
+    payment-gateway:
+      build:
+        context: ./services/payment-gateway
+        dockerfile: Dockerfile
+      container_name: payment-gateway
+      depends_on:
+        kafka:
+          condition: service_healthy
+        rabbitmq:
+          condition: service_healthy
+        dynamodb-local:
+          condition: service_healthy
+      networks:
+        - payment-network
+      ports:
+        - "8080:8080"
+      environment:
+        <<: *common-variables
+        QUARKUS_PROFILE: chaos-testing
+        DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+        DYNAMODB_TABLE: PaymentTransactions
+        DYNAMODB_EVENT_STORE_TABLE: PaymentEventStore
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+        RABBITMQ_HOST: rabbitmq
+        RABBITMQ_PORT: 5672
+        RABBITMQ_USERNAME: payment
+        RABBITMQ_PASSWORD: payment_secret
+        RABBITMQ_VIRTUAL_HOST: payment-vhost
+        CHAOS_ENABLED: ${CHAOS_ENABLED:-false}
+        CHAOS_FAILURE_RATE: ${CHAOS_FAILURE_RATE:-0.1}
+        CHAOS_SCENARIOS: LATENCY,ERROR,THROTTLE
+        AWS_DEFAULT_REGION: us-east-1
+        AWS_ACCESS_KEY_ID: test
+        AWS_SECRET_ACCESS_KEY: test
+        QUARKUS_HTTP_CORS: "true"
+        QUARKUS_HTTP_CORS_ORIGINS: "*"
+      healthcheck:
+        test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+        interval: 15s
+        timeout: 10s
+        retries: 5
+        start_period: 30s
+      deploy:
+        resources:
+          limits:
+            memory: 512M
+          reservations:
+            memory: 256M
+
+    payment-processor:
+      build:
+        context: ./services/payment-processor
+        dockerfile: Dockerfile
+      container_name: payment-processor
+      depends_on:
+        - payment-gateway
+      networks:
+        - payment-network
+      ports:
+        - "8081:8081"
+      environment:
+        <<: *common-variables
+        QUARKUS_HTTP_PORT: 8081
+        QUARKUS_PROFILE: chaos-testing
+        DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+        CHAOS_ENABLED: ${CHAOS_ENABLED:-false}
+        AWS_DEFAULT_REGION: us-east-1
+        AWS_ACCESS_KEY_ID: test
+        AWS_SECRET_ACCESS_KEY: test
+      deploy:
+        resources:
+          limits:
+            memory: 512M
+
+    payment-query:
+      build:
+        context: ./services/payment-query
+        dockerfile: Dockerfile
+      container_name: payment-query
+      depends_on:
+        - dynamodb-local
+        - kafka
+      networks:
+        - payment-network
+      ports:
+        - "8082:8082"
+      environment:
+        <<: *common-variables
+        QUARKUS_HTTP_PORT: 8082
+        DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+        AWS_DEFAULT_REGION: us-east-1
+        AWS_ACCESS_KEY_ID: test
+        AWS_SECRET_ACCESS_KEY: test
+      deploy:
+        resources:
+          limits:
+            memory: 256M
+
+    chaos-monkey:
+      build:
+        context: ./services/chaos-monkey
+        dockerfile: Dockerfile
+      container_name: chaos-monkey
+      depends_on:
+        - payment-gateway
+      networks:
+        - payment-network
+      ports:
+        - "8090:8090"
+      environment:
+        <<: *common-variables
+        QUARKUS_HTTP_PORT: 8090
+        CHAOS_ENABLED: "true"
+        CHAOS_FAILURE_RATE: ${CHAOS_FAILURE_RATE:-0.1}
+        CHAOS_LATENCY_MIN_MS: 100
+        CHAOS_LATENCY_MAX_MS: 5000
+        CHAOS_SCENARIOS: LATENCY,ERROR,THROTTLE,NETWORK_PARTITION,REGION_FAILURE
+        TARGET_SERVICES: payment-gateway:8080,payment-processor:8081
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      deploy:
+        resources:
+          limits:
+            memory: 256M
+
+    fraud-detection:
+      build:
+        context: ./services/fraud-detection
+        dockerfile: Dockerfile
+      container_name: fraud-detection
+      networks:
+        - payment-network
+      ports:
+        - "8083:8083"
+      environment:
+        <<: *common-variables
+        QUARKUS_HTTP_PORT: 8083
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      deploy:
+        resources:
+          limits:
+            memory: 256M
+
+    notification-service:
+      build:
+        context: ./services/notification-service
+        dockerfile: Dockerfile
+      container_name: notification-service
+      networks:
+        - payment-network
+      ports:
+        - "8084:8084"
+      environment:
+        <<: *common-variables
+        QUARKUS_HTTP_PORT: 8084
+        RABBITMQ_HOST: rabbitmq
+        KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      deploy:
+        resources:
+          limits:
+            memory: 256M
+
+    # ============================================
+    # Monitoring Stack
+    # ============================================
+
+    prometheus:
+      image: prom/prometheus:v2.47.0
+      container_name: prometheus
+      networks:
+        - payment-network
+      ports:
+        - "9090:9090"
+      volumes:
+        - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+        - ./monitoring/prometheus/rules:/etc/prometheus/rules
+        - prometheus-data:/prometheus
+      command:
+        - '--config.file=/etc/prometheus/prometheus.yml'
+        - '--storage.tsdb.path=/prometheus'
+        - '--storage.tsdb.retention.time=30d'
+        - '--web.enable-lifecycle'
+        - '--web.enable-admin-api'
+      healthcheck:
+        test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+      deploy:
+        resources:
+          limits:
+            memory: 512M
+
+    alertmanager:
+      image: prom/alertmanager:v0.26.0
+      container_name: alertmanager
+      networks:
+        - payment-network
+      ports:
+        - "9093:9093"
+      volumes:
+        - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      command:
+        - '--config.file=/etc/alertmanager/alertmanager.yml'
+        - '--cluster.advertise-address=0.0.0.0:9093'
+      deploy:
+        resources:
+          limits:
+            memory: 128M
+
+    grafana:
+      image: grafana/grafana:10.1.0
+      container_name: grafana
+      depends_on:
+        - prometheus
+        - elasticsearch
+      networks:
+        - payment-network
+      ports:
+        - "3000:3000"
+      environment:
+        GF_SECURITY_ADMIN_USER: admin
+        GF_SECURITY_ADMIN_PASSWORD: chaos_admin_2024
+        GF_USERS_ALLOW_SIGN_UP: "false"
+        GF_INSTALL_PLUGINS: grafana-piechart-panel,grafana-worldmap-panel
+        GF_AUTH_ANONYMOUS_ENABLED: "true"
+        GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      volumes:
+        - grafana-data:/var/lib/grafana
+        - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+        - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+      healthcheck:
+        test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+        interval: 15s
+        timeout: 5s
+        retries: 5
+      deploy:
+        resources:
+          limits:
+            memory: 256M
+
+    # ============================================
+    # ELK Stack
+    # ============================================
+
+    elasticsearch:
+      image: docker.elastic.co/elasticsearch/elasticsearch:8.10.0
+      container_name: elasticsearch
+      networks:
+        - payment-network
+      ports:
+        - "9200:9200"
+      environment:
+        - discovery.type=single-node
+        - xpack.security.enabled=false
+        - xpack.monitoring.collection.enabled=true
+        - ES_JAVA_OPTS=-Xms512m -Xmx512m
+        - bootstrap.memory_lock=true
+      volumes:
+        - elasticsearch-data:/usr/share/elasticsearch/data
+      ulimits:
+        memlock:
+          soft: -1
+          hard: -1
+      healthcheck:
+        test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+        interval: 15s
+        timeout: 10s
+        retries: 10
+      deploy:
+        resources:
+          limits:
+            memory: 1G
+
+    logstash:
+      image: docker.elastic.co/logstash/logstash:8.10.0
+      container_name: logstash
+      depends_on:
+        elasticsearch:
+          condition: service_healthy
+        kafka:
+          condition: service_healthy
+      networks:
+        - payment-network
+      ports:
+        - "5044:5044"
+        - "5000:5000"
+        - "9600:9600"
+      volumes:
+        - ./monitoring/elk/logstash/pipeline:/usr/share/logstash/pipeline
+        - ./monitoring/elk/logstash/config:/usr/share/logstash/config
+      environment:
+        LS_JAVA_OPTS: "-Xmx256m -Xms256m"
+      healthcheck:
+        test: ["CMD", "curl", "-f", "http://localhost:9600"]
+        interval: 20s
+        timeout: 10s
+        retries: 5
+      deploy:
+        resources:
+          limits:
+            memory: 512M
+
+    kibana:
+      image: docker.elastic.co/kibana/kibana:8.10.0
+      container_name: kibana
+      depends_on:
+        elasticsearch:
+          condition: service_healthy
+      networks:
+        - payment-network
+      ports:
+        - "5601:5601"
+      environment:
+        ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+        KIBANA_SYSTEM_PASSWORD: kibana_pass
+      healthcheck:
+        test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+        interval: 20s
+        timeout: 10s
+        retries: 10
+      deploy:
+        resources:
+          limits:
+            memory: 512M
+
+    # ============================================
+    # Supporting Services
+    # ============================================
+
+    kafka-ui:
+      image: provectuslabs/kafka-ui:latest
+      container_name: kafka-ui
+      depends_on:
+        - kafka
+      networks:
+        - payment-network
+      ports:
+        - "8085:8080"
+      environment:
+        KAFKA_CLUSTERS_0_NAME: payment-cluster
+        KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+        KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      deploy:
+        resources:
+          limits:
+            memory: 256M
+
+    kafka-exporter:
+      image: danielqsj/kafka-exporter:v1.7.0
+      container_name: kafka-exporter
+      depends_on:
+        - kafka
+      networks:
+        - payment-network
+      ports:
+        - "9308:9308"
+      command:
+        - '--kafka.server=kafka:29092'
+        - '--kafka.version=2.8.0'
+
+    node-exporter:
+      image: prom/node-exporter:v1.6.1
+      container_name: node-exporter
+      networks:
+        - payment-network
+      ports:
+        - "9100:9100"
+      volumes:
+        - /proc:/host/proc:ro
+        - /sys:/host/sys:ro
+        - /:/rootfs:ro
+      command:
+        - '--path.procfs=/host/proc'
+        - '--path.rootfs=/rootfs'
+        - '--path.sysfs=/host/sys'
+      deploy:
+        resources:
+          limits:
+            memory: 128M
+
+    cadvisor:
+      image: gcr.io/cadvisor/cadvisor:v0.47.0
+      container_name: cadvisor
+      networks:
+        - payment-network
+      ports:
+        - "8086:8080"
+      volumes:
+        - /:/rootfs:ro
+        - /var/run:/var/run:ro
+        - /sys:/sys:ro
+        - /var/lib/docker/:/var/lib/docker:ro
+      deploy:
+        resources:
+          limits:
+            memory: 128M

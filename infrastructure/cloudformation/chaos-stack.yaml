@@ -1,0 +1,512 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Payment Chaos Engineering — Observability & Chaos Control Plane
+  Complements the Terraform-managed resources (DynamoDB, Lambda, API Gateway, Route53).
+  This stack owns: CloudWatch Alarms, CloudWatch Dashboard, SNS alert topics,
+  SSM Parameter Store config, and EventBridge rules for scheduled chaos experiments.
+
+# ============================================
+# Parameters
+# ============================================
+Parameters:
+
+  Environment:
+    Type: String
+    Default: chaos-testing
+    AllowedValues: [dev, chaos-testing, staging, prod]
+    Description: Deployment environment
+
+  PrimaryRegion:
+    Type: String
+    Default: us-east-1
+
+  SecondaryRegion:
+    Type: String
+    Default: eu-west-1
+
+  PaymentProcessorFunctionName:
+    Type: String
+    Default: PaymentProcessor
+    Description: Name of the PaymentProcessor Lambda (created by Terraform)
+
+  PaymentQueryFunctionName:
+    Type: String
+    Default: PaymentQuery
+
+  ChaosInjectorFunctionName:
+    Type: String
+    Default: ChaosInjector
+
+  PaymentsTableName:
+    Type: String
+    Default: PaymentTransactions
+
+  EventStoreTableName:
+    Type: String
+    Default: PaymentEventStore
+
+  DlqName:
+    Type: String
+    Default: payment-dlq
+
+  AlertEmail:
+    Type: String
+    Default: ops@payment-chaos.example.com
+    Description: Email address for critical chaos/payment alerts
+
+  ChaosEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+  ChaosFailureRate:
+    Type: String
+    Default: "0.10"
+
+  ChaosScenarios:
+    Type: String
+    Default: "LATENCY,ERROR,THROTTLE"
+
+# ============================================
+# Resources
+# ============================================
+Resources:
+
+  # --------------------------------------------------
+  # SNS Topics — alert routing
+  # --------------------------------------------------
+
+  CriticalAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub payment-chaos-critical-${Environment}
+      DisplayName: Payment Chaos — Critical Alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: PaymentChaosEngineering
+
+  ChaosEventsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub payment-chaos-events-${Environment}
+      DisplayName: Payment Chaos — Experiment Events
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # --------------------------------------------------
+  # SSM Parameter Store — chaos configuration
+  # --------------------------------------------------
+
+  ChaosEnabledParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /payment-chaos/${Environment}/chaos/enabled
+      Type: String
+      Value: !Ref ChaosEnabled
+      Description: Master chaos-mode switch — flip to "true" to activate chaos injection
+
+  ChaosFailureRateParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /payment-chaos/${Environment}/chaos/failure-rate
+      Type: String
+      Value: !Ref ChaosFailureRate
+      Description: Probability (0.0–1.0) that a request will have chaos injected
+
+  ChaosScenariosParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /payment-chaos/${Environment}/chaos/scenarios
+      Type: String
+      Value: !Ref ChaosScenarios
+      Description: "Comma-separated list of active chaos scenarios: LATENCY,ERROR,THROTTLE,NETWORK_PARTITION,REGION_FAILURE"
+
+  PaymentProvidersParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /payment-chaos/${Environment}/payment/providers
+      Type: String
+      Value: "ORANGE,MOOV,MTN,WAVE,AIRTEL,MPESA,VISA,MASTERCARD,BTC,PI_SPI_BCEAO"
+      Description: Active payment providers
+
+  # --------------------------------------------------
+  # CloudWatch Alarms
+  # --------------------------------------------------
+
+  # Payment error rate > 5 % → critical
+  PaymentHighErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub PaymentHighErrorRate-${Environment}
+      AlarmDescription: Payment error rate exceeded 5% — possible provider failure or chaos experiment impact
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PaymentProcessorFunctionName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+      OKActions:
+        - !Ref CriticalAlertsTopic
+
+  # Payment processor p99 latency > 2 s → warning
+  PaymentHighLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub PaymentHighLatency-${Environment}
+      AlarmDescription: Payment processing P99 latency exceeded 2 seconds
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PaymentProcessorFunctionName
+      ExtendedStatistic: p99
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 2000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+
+  # Lambda throttles on PaymentProcessor → critical
+  PaymentProcessorThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub PaymentProcessorThrottles-${Environment}
+      AlarmDescription: PaymentProcessor Lambda is being throttled
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PaymentProcessorFunctionName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+
+  # DLQ depth growing → warning
+  DlqDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub PaymentDLQGrowing-${Environment}
+      AlarmDescription: Dead-letter queue depth is growing — payments may be failing without retry
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref DlqName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+
+  # DynamoDB throttles on PaymentTransactions
+  DynamoDBThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub DynamoDBThrottling-${Environment}
+      AlarmDescription: DynamoDB throttling detected on PaymentTransactions — possible capacity issue
+      Namespace: AWS/DynamoDB
+      MetricName: SystemErrors
+      Dimensions:
+        - Name: TableName
+          Value: !Ref PaymentsTableName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+
+  # Chaos injector invocations (detect active experiments)
+  ChaosInjectorActiveAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ChaosExperimentActive-${Environment}
+      AlarmDescription: Chaos injector Lambda is executing — chaos experiment is in progress
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ChaosInjectorFunctionName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref ChaosEventsTopic
+
+  # PaymentQuery errors → warning
+  QueryServiceErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub PaymentQueryErrors-${Environment}
+      AlarmDescription: PaymentQuery Lambda errors — read side of CQRS may be degraded
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref PaymentQueryFunctionName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+
+  # --------------------------------------------------
+  # CloudWatch Dashboard
+  # --------------------------------------------------
+
+  PaymentChaosDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub PaymentChaosEngineering-${Environment}
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0, "y": 0, "width": 24, "height": 2,
+              "properties": {
+                "markdown": "# Payment Chaos Engineering — ${Environment}\nRegions: **${PrimaryRegion}** (primary) → **${SecondaryRegion}** (failover) | Providers: ORANGE, MOOV, MTN, WAVE, AIRTEL, MPESA, VISA, MASTERCARD, BTC, PI_SPI_BCEAO"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 2, "width": 8, "height": 6,
+              "properties": {
+                "title": "Payment Processor — Invocations vs Errors",
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${PaymentProcessorFunctionName}", {"label":"Invocations","color":"#2ca02c"}],
+                  ["AWS/Lambda", "Errors",       "FunctionName", "${PaymentProcessorFunctionName}", {"label":"Errors",      "color":"#d62728"}]
+                ],
+                "stat": "Sum",
+                "period": 60,
+                "view": "timeSeries",
+                "region": "${PrimaryRegion}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 2, "width": 8, "height": 6,
+              "properties": {
+                "title": "Payment Processor — P50 / P99 Latency (ms)",
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "${PaymentProcessorFunctionName}", {"stat":"p50","label":"P50"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${PaymentProcessorFunctionName}", {"stat":"p99","label":"P99","color":"#ff7f0e"}]
+                ],
+                "period": 60,
+                "view": "timeSeries",
+                "region": "${PrimaryRegion}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 2, "width": 8, "height": 6,
+              "properties": {
+                "title": "Chaos Injector — Invocations",
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${ChaosInjectorFunctionName}", {"label":"Chaos Experiments","color":"#9467bd"}],
+                  ["AWS/Lambda", "Errors",       "FunctionName", "${ChaosInjectorFunctionName}", {"label":"Experiment Errors","color":"#d62728"}]
+                ],
+                "stat": "Sum",
+                "period": 300,
+                "view": "timeSeries",
+                "region": "${PrimaryRegion}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 8, "width": 8, "height": 6,
+              "properties": {
+                "title": "DynamoDB — Read/Write Capacity Used",
+                "metrics": [
+                  ["AWS/DynamoDB", "ConsumedReadCapacityUnits",  "TableName", "${PaymentsTableName}",   {"label":"Payments RCU"}],
+                  ["AWS/DynamoDB", "ConsumedWriteCapacityUnits", "TableName", "${PaymentsTableName}",   {"label":"Payments WCU"}],
+                  ["AWS/DynamoDB", "ConsumedReadCapacityUnits",  "TableName", "${EventStoreTableName}", {"label":"EventStore RCU"}],
+                  ["AWS/DynamoDB", "ConsumedWriteCapacityUnits", "TableName", "${EventStoreTableName}", {"label":"EventStore WCU"}]
+                ],
+                "stat": "Sum",
+                "period": 60,
+                "view": "timeSeries",
+                "region": "${PrimaryRegion}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 8, "width": 8, "height": 6,
+              "properties": {
+                "title": "DynamoDB — System Errors & Throttles",
+                "metrics": [
+                  ["AWS/DynamoDB", "SystemErrors",               "TableName", "${PaymentsTableName}", {"label":"System Errors","color":"#d62728"}],
+                  ["AWS/DynamoDB", "ThrottledRequests",          "TableName", "${PaymentsTableName}", {"label":"Throttles",    "color":"#ff7f0e"}]
+                ],
+                "stat": "Sum",
+                "period": 60,
+                "view": "timeSeries",
+                "region": "${PrimaryRegion}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 8, "width": 8, "height": 6,
+              "properties": {
+                "title": "SQS Dead-Letter Queue Depth",
+                "metrics": [
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${DlqName}", {"label":"DLQ Depth","color":"#d62728"}]
+                ],
+                "stat": "Maximum",
+                "period": 60,
+                "view": "timeSeries",
+                "region": "${PrimaryRegion}"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 14, "width": 12, "height": 6,
+              "properties": {
+                "title": "Lambda Throttles — All Functions",
+                "metrics": [
+                  ["AWS/Lambda", "Throttles", "FunctionName", "${PaymentProcessorFunctionName}", {"label":"PaymentProcessor"}],
+                  ["AWS/Lambda", "Throttles", "FunctionName", "${PaymentQueryFunctionName}",     {"label":"PaymentQuery"}],
+                  ["AWS/Lambda", "Throttles", "FunctionName", "${ChaosInjectorFunctionName}",    {"label":"ChaosInjector"}]
+                ],
+                "stat": "Sum",
+                "period": 60,
+                "view": "timeSeries",
+                "region": "${PrimaryRegion}"
+              }
+            },
+            {
+              "type": "alarm",
+              "x": 12, "y": 14, "width": 12, "height": 6,
+              "properties": {
+                "title": "Active Alarms",
+                "alarms": [
+                  "arn:aws:cloudwatch:${PrimaryRegion}:${AWS::AccountId}:alarm:PaymentHighErrorRate-${Environment}",
+                  "arn:aws:cloudwatch:${PrimaryRegion}:${AWS::AccountId}:alarm:PaymentHighLatency-${Environment}",
+                  "arn:aws:cloudwatch:${PrimaryRegion}:${AWS::AccountId}:alarm:PaymentProcessorThrottles-${Environment}",
+                  "arn:aws:cloudwatch:${PrimaryRegion}:${AWS::AccountId}:alarm:PaymentDLQGrowing-${Environment}",
+                  "arn:aws:cloudwatch:${PrimaryRegion}:${AWS::AccountId}:alarm:DynamoDBThrottling-${Environment}",
+                  "arn:aws:cloudwatch:${PrimaryRegion}:${AWS::AccountId}:alarm:ChaosExperimentActive-${Environment}"
+                ]
+              }
+            }
+          ]
+        }
+
+  # --------------------------------------------------
+  # EventBridge — scheduled chaos experiments
+  # --------------------------------------------------
+
+  ChaosExperimentScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub chaos-experiment-schedule-${Environment}
+      Description: Triggers the ChaosInjector Lambda every hour (during business hours) for scheduled chaos experiments
+      # Mon–Fri 08:00–18:00 UTC, every hour
+      ScheduleExpression: "cron(0 8-18 ? * MON-FRI *)"
+      State: DISABLED  # Enable manually when ready for scheduled chaos
+      Targets:
+        - Id: ChaosInjectorTarget
+          Arn: !Sub arn:aws:lambda:${PrimaryRegion}:${AWS::AccountId}:function:${ChaosInjectorFunctionName}
+          Input: !Sub |
+            {
+              "experimentType": "scheduled",
+              "scenarios": ["LATENCY", "ERROR", "THROTTLE"],
+              "failureRate": 0.10,
+              "durationSeconds": 300,
+              "providers": ["ORANGE", "MTN", "WAVE", "VISA"],
+              "environment": "${Environment}"
+            }
+
+  ChaosExperimentSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ChaosInjectorFunctionName
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ChaosExperimentScheduleRule.Arn
+
+  # Daily chaos report — 18:00 UTC
+  ChaosReportScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub chaos-daily-report-${Environment}
+      Description: Publishes a daily chaos experiment summary to SNS at 18:00 UTC
+      ScheduleExpression: "cron(0 18 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Id: ChaosReportSNS
+          Arn: !Ref ChaosEventsTopic
+          Input: !Sub |
+            {
+              "type": "DAILY_CHAOS_REPORT",
+              "environment": "${Environment}",
+              "message": "Daily chaos engineering report. Check CloudWatch dashboard: PaymentChaosEngineering-${Environment}"
+            }
+
+# ============================================
+# Outputs
+# ============================================
+Outputs:
+
+  CriticalAlertsTopicArn:
+    Description: SNS topic ARN for critical payment/chaos alerts
+    Value: !Ref CriticalAlertsTopic
+    Export:
+      Name: !Sub ${AWS::StackName}-CriticalAlertsTopic
+
+  ChaosEventsTopicArn:
+    Description: SNS topic ARN for chaos experiment events
+    Value: !Ref ChaosEventsTopic
+    Export:
+      Name: !Sub ${AWS::StackName}-ChaosEventsTopic
+
+  DashboardURL:
+    Description: CloudWatch Dashboard URL
+    Value: !Sub https://${PrimaryRegion}.console.aws.amazon.com/cloudwatch/home?region=${PrimaryRegion}#dashboards:name=PaymentChaosEngineering-${Environment}
+
+  ChaosEnabledParamName:
+    Description: SSM parameter to toggle chaos mode (set to 'true' to activate)
+    Value: !Ref ChaosEnabledParam
+    Export:
+      Name: !Sub ${AWS::StackName}-ChaosEnabledParam
+
+  ChaosFailureRateParamName:
+    Description: SSM parameter controlling chaos failure probability
+    Value: !Ref ChaosFailureRateParam
+    Export:
+      Name: !Sub ${AWS::StackName}-ChaosFailureRateParam
+
+  ChaosScheduleRuleName:
+    Description: EventBridge rule for scheduled chaos experiments (DISABLED by default — enable when ready)
+    Value: !Ref ChaosExperimentScheduleRule

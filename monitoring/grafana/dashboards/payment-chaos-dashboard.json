@@ -1,0 +1,236 @@
+    {
+        "dashboard": {
+        "id": null,
+        "title": "Payment Chaos Engineering Dashboard",
+        "description": "Multi-region payment aggregator chaos engineering monitoring",
+        "tags": ["chaos", "payment", "resilience"],
+        "timezone": "browser",
+        "schemaVersion": 38,
+        "version": 1,
+        "refresh": "5s",
+        "time": {
+            "from": "now-1h",
+            "to": "now"
+        },
+        "panels": [
+            {
+            "id": 1,
+            "title": "💳 Payment Success Rate",
+            "type": "stat",
+            "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+            "targets": [
+                {
+                "expr": "rate(payment_processed_total{status='COMPLETED'}[5m]) / rate(payment_processed_total[5m]) * 100",
+                "legendFormat": "Success Rate %"
+                }
+            ],
+            "options": {
+                "colorMode": "background",
+                "thresholds": {
+                "steps": [
+                    { "value": 0, "color": "red" },
+                    { "value": 90, "color": "yellow" },
+                    { "value": 95, "color": "green" }
+                ]
+                }
+            }
+            },
+            {
+            "id": 2,
+            "title": "🔥 Active Chaos Injections",
+            "type": "stat",
+            "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+            "targets": [
+                {
+                "expr": "sum(increase(chaos_injection_total[5m]))",
+                "legendFormat": "Injections"
+                }
+            ],
+            "options": {
+                "colorMode": "background",
+                "thresholds": {
+                "steps": [
+                    { "value": 0, "color": "green" },
+                    { "value": 1, "color": "yellow" },
+                    { "value": 10, "color": "red" }
+                ]
+                }
+            }
+            },
+            {
+            "id": 3,
+            "title": "⚡ Payment Processing Rate (rps)",
+            "type": "stat",
+            "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+            "targets": [
+                {
+                "expr": "sum(rate(payment_processed_total[1m]))",
+                "legendFormat": "RPS"
+                }
+            ]
+            },
+            {
+            "id": 4,
+            "title": "🌍 Region Status",
+            "type": "stat",
+            "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+            "targets": [
+                {
+                "expr": "chaos_region_failure_total",
+                "legendFormat": "Region Failures"
+                }
+            ]
+            },
+            {
+            "id": 5,
+            "title": "📊 Payment Volume by Provider",
+            "type": "timeseries",
+            "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+            "targets": [
+                {
+                "expr": "rate(payment_processed_total[1m])",
+                "legendFormat": "{{provider}}"
+                }
+            ],
+            "options": {
+                "tooltip": { "mode": "multi" },
+                "legend": { "displayMode": "table", "placement": "right" }
+            }
+            },
+            {
+            "id": 6,
+            "title": "🔥 Chaos Events Timeline",
+            "type": "timeseries",
+            "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+            "targets": [
+                {
+                "expr": "rate(chaos_injection_total[1m])",
+                "legendFormat": "{{scenario}} - {{provider}}"
+                }
+            ]
+            },
+            {
+            "id": 7,
+            "title": "⏱️ Payment Latency (P50/P90/P99)",
+            "type": "timeseries",
+            "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+            "targets": [
+                {
+                "expr": "histogram_quantile(0.50, rate(payment_processing_duration_seconds_bucket[5m])) * 1000",
+                "legendFormat": "P50 {{provider}}"
+                },
+                {
+                "expr": "histogram_quantile(0.90, rate(payment_processing_duration_seconds_bucket[5m])) * 1000",
+                "legendFormat": "P90 {{provider}}"
+                },
+                {
+                "expr": "histogram_quantile(0.99, rate(payment_processing_duration_seconds_bucket[5m])) * 1000",
+                "legendFormat": "P99 {{provider}}"
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                "unit": "ms",
+                "custom": {
+                    "lineWidth": 2
+                }
+                }
+            }
+            },
+            {
+            "id": 8,
+            "title": "💀 Circuit Breaker Status",
+            "type": "table",
+            "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+            "targets": [
+                {
+                "expr": "microprofile_ft_circuitbreaker_opened_total",
+                "legendFormat": "{{method}}"
+                }
+            ]
+            },
+            {
+            "id": 9,
+            "title": "📨 Kafka Consumer Lag",
+            "type": "timeseries",
+            "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+            "targets": [
+                {
+                "expr": "kafka_consumer_lag_sum",
+                "legendFormat": "{{topic}} - {{consumergroup}}"
+                }
+            ]
+            },
+            {
+            "id": 10,
+            "title": "🗃️ DynamoDB Operations",
+            "type": "timeseries",
+            "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+            "targets": [
+                {
+                "expr": "rate(aws_dynamodb_successful_request_latency_sum[5m])",
+                "legendFormat": "{{operation}} {{tablename}}"
+                }
+            ]
+            },
+            {
+            "id": 11,
+            "title": "🧪 Chaos Experiment Results",
+            "type": "bargauge",
+            "gridPos": { "x": 0, "y": 28, "w": 24, "h": 8 },
+            "targets": [
+                {
+                "expr": "chaos_experiment_passed_total",
+                "legendFormat": "PASSED: {{name}}"
+                },
+                {
+                "expr": "chaos_experiment_failed_total",
+                "legendFormat": "FAILED: {{name}}"
+                }
+            ]
+            },
+            {
+            "id": 12,
+            "title": "💱 Payment Amount Distribution",
+            "type": "histogram",
+            "gridPos": { "x": 0, "y": 36, "w": 12, "h": 8 },
+            "targets": [
+                {
+                "expr": "payment_amount_histogram_bucket",
+                "legendFormat": "{{provider}}"
+                }
+            ]
+            },
+            {
+            "id": 13,
+            "title": "🌐 Multi-Region Traffic Split",
+            "type": "piechart",
+            "gridPos": { "x": 12, "y": 36, "w": 12, "h": 8 },
+            "targets": [
+                {
+                "expr": "sum by (region) (payment_processed_total)",
+                "legendFormat": "{{region}}"
+                }
+            ]
+            }
+        ],
+        "annotations": {
+            "list": [
+            {
+                "name": "Chaos Events",
+                "datasource": "Prometheus",
+                "expr": "changes(chaos_injection_total[1m]) > 0",
+                "step": "60s",
+                "titleFormat": "🔥 Chaos Injected",
+                "tagKeys": "scenario,provider"
+            },
+            {
+                "name": "Deployments",
+                "datasource": "Prometheus",
+                "expr": "resets(payment_gateway_up[5m]) > 0",
+                "titleFormat": "🚀 Deployment"
+            }
+            ]
+        }
+        }
+    }

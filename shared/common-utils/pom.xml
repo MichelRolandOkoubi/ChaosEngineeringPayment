@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+    <project xmlns="http://maven.apache.org/POM/4.0.0"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+            https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+        <modelVersion>4.0.0</modelVersion>
+
+        <parent>
+            <groupId>com.chaos.payment</groupId>
+            <artifactId>payment-chaos-engineering</artifactId>
+            <version>1.0.0-SNAPSHOT</version>
+            <relativePath>../../pom.xml</relativePath>
+        </parent>
+
+        <artifactId>common-utils</artifactId>
+        <name>Payment - Common Utilities</name>
+        <description>
+            Utilitaires communs: Logging, Security, Serialization,
+            Exception handling, Correlation ID, Idempotency
+        </description>
+
+        <dependencies>
+
+            <!-- Domain Model -->
+            <dependency>
+                <groupId>com.chaos.payment</groupId>
+                <artifactId>domain-model</artifactId>
+            </dependency>
+
+            <!-- Quarkus -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-core</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-arc</artifactId>
+            </dependency>
+
+            <!-- Logging -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-logging-json</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>org.jboss.slf4j</groupId>
+                <artifactId>slf4j-jboss-logmanager</artifactId>
+            </dependency>
+
+            <!-- Security -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-security</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-smallrye-jwt</artifactId>
+            </dependency>
+
+            <!-- Jackson -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-jackson</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.datatype</groupId>
+                <artifactId>jackson-datatype-jsr310</artifactId>
+            </dependency>
+
+            <!-- OpenTelemetry Tracing -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-opentelemetry</artifactId>
+            </dependency>
+
+            <!-- Utilities -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+            </dependency>
+            <dependency>
+                <groupId>com.google.guava</groupId>
+                <artifactId>guava</artifactId>
+            </dependency>
+
+            <!-- Tests -->
+            <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-junit5</artifactId>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.assertj</groupId>
+                <artifactId>assertj-core</artifactId>
+                <scope>test</scope>
+            </dependency>
+
+        </dependencies>
+
+    </project>
